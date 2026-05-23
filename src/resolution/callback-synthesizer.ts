@@ -40,6 +40,9 @@ const MAX_JSX_CHILDREN = 30;
 // are already caught by JSX_TAG_RE via the SFC component node.
 const VUE_KEBAB_RE = /<([a-z][a-z0-9]*(?:-[a-z0-9]+)+)[\s/>]/g;
 const VUE_HANDLER_RE = /(?:@|v-on:)([a-zA-Z][\w-]*)(?:\.[\w]+)*\s*=\s*"([^"]+)"/g;
+// Composable/hook destructure: `const { close: closeSidebar } = useSidebarControl()`.
+// Captures the destructure body + the called composable; only `use*` calls qualify.
+const VUE_DESTRUCTURE_RE = /(?:const|let|var)\s*\{([^}]+)\}\s*=\s*(\w+)\s*\(/g;
 
 function kebabToPascal(s: string): string {
   return s.split('-').map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join('');
@@ -298,6 +301,9 @@ function vueTemplateEdges(ctx: ResolutionContext): Edge[] {
   const seen = new Set<string>();
   const COMPONENT_KINDS = new Set(['component', 'function', 'class']);
   const HANDLER_KINDS = new Set(['method', 'function']);
+  // A composable's returned member may be a fn (`function close(){}`) or an
+  // arrow assigned to a const (`const close = () => {}`).
+  const RETURN_KINDS = new Set(['method', 'function', 'variable', 'constant']);
   for (const file of ctx.getAllFiles()) {
     if (!file.endsWith('.vue')) continue;
     const content = ctx.readFile(file);
@@ -305,32 +311,62 @@ function vueTemplateEdges(ctx: ResolutionContext): Edge[] {
     if (!tpl) continue;
     const comp = ctx.getNodesInFile(file).find((n) => n.kind === 'component');
     if (!comp) continue;
+
+    // Composable-destructure map: alias → { composable, key }. Lets us resolve a
+    // template handler that isn't a local function but a destructured composable
+    // return (`@click="closeSidebar"` ← `const { close: closeSidebar } = useSidebarControl()`).
+    const script = content.match(/<script[^>]*>([\s\S]*?)<\/script>/i)?.[1] ?? '';
+    const destructured = new Map<string, { composable: string; key: string }>();
+    VUE_DESTRUCTURE_RE.lastIndex = 0;
+    let dm: RegExpExecArray | null;
+    while ((dm = VUE_DESTRUCTURE_RE.exec(script))) {
+      if (!/^use[A-Z]/.test(dm[2]!)) continue; // composables / hooks only
+      for (const part of dm[1]!.split(',')) {
+        const pm = part.trim().match(/^(\w+)\s*(?::\s*(\w+))?$/); // key | key: alias
+        if (pm) destructured.set(pm[2] || pm[1]!, { composable: dm[2]!, key: pm[1]! });
+      }
+    }
+
     let added = 0;
-    const link = (name: string, kinds: Set<string>, meta: Record<string, unknown>) => {
-      if (added >= MAX_JSX_CHILDREN) return;
-      const matches = ctx.getNodesByName(name).filter((n) => kinds.has(n.kind));
-      // Prefer a target in THIS SFC (handlers are defined in the same file's
-      // script) — avoids cross-file mis-resolution when a name repeats across a
-      // monorepo (e.g. 7 code-login.vue each with handleLogin). Child components
-      // live in other files, so they fall back to the first match.
-      const target = matches.find((n) => n.filePath === file) ?? matches[0];
-      if (!target || target.id === comp.id) return;
-      const key = `${comp.id}>${target.id}>${meta.synthesizedBy}`;
-      if (seen.has(key)) return;
-      seen.add(key);
+    const addEdge = (target: Node | undefined, meta: Record<string, unknown>) => {
+      if (added >= MAX_JSX_CHILDREN || !target || target.id === comp.id) return;
+      const k = `${comp.id}>${target.id}>${meta.synthesizedBy}`;
+      if (seen.has(k)) return;
+      seen.add(k);
       edges.push({ source: comp.id, target: target.id, kind: 'calls', line: comp.startLine, provenance: 'heuristic', metadata: meta });
       added++;
     };
+    // Prefer a target in THIS SFC (handlers live in the same file's script) —
+    // avoids cross-file mis-match when a name repeats across a monorepo.
+    const resolve = (name: string, kinds: Set<string>): Node | undefined => {
+      const matches = ctx.getNodesByName(name).filter((n) => kinds.has(n.kind));
+      return matches.find((n) => n.filePath === file) ?? matches[0];
+    };
+
     let m: RegExpExecArray | null;
     VUE_KEBAB_RE.lastIndex = 0;
-    while ((m = VUE_KEBAB_RE.exec(tpl))) link(kebabToPascal(m[1]!), COMPONENT_KINDS, { synthesizedBy: 'jsx-render', via: m[1] });
+    while ((m = VUE_KEBAB_RE.exec(tpl))) addEdge(resolve(kebabToPascal(m[1]!), COMPONENT_KINDS), { synthesizedBy: 'jsx-render', via: m[1] });
     VUE_HANDLER_RE.lastIndex = 0;
     while ((m = VUE_HANDLER_RE.exec(tpl))) {
       const event = m[1]!;
       const expr = m[2]!.trim();
       if (expr.includes('=>') || expr.startsWith('$')) continue; // inline arrow / $emit
       const name = expr.match(/^([A-Za-z_]\w*)/)?.[1];
-      if (name) link(name, HANDLER_KINDS, { synthesizedBy: 'vue-handler', event });
+      if (!name) continue;
+      const direct = resolve(name, HANDLER_KINDS);
+      if (direct) { addEdge(direct, { synthesizedBy: 'vue-handler', event }); continue; }
+      // Composable-destructure handler → resolve to the composable's returned fn.
+      const d = destructured.get(name);
+      if (!d) continue;
+      const composable = resolve(d.composable, HANDLER_KINDS);
+      // Resolve to the SPECIFIC returned member (e.g. `close`) defined in the
+      // composable's file. No fallback to the composable itself — the component
+      // already has a static `useX()` call edge, so that would just be redundant
+      // and less precise.
+      const keyFn = composable
+        ? ctx.getNodesByName(d.key).find((n) => RETURN_KINDS.has(n.kind) && n.filePath === composable.filePath)
+        : undefined;
+      if (keyFn) addEdge(keyFn, { synthesizedBy: 'vue-handler', event, via: d.composable });
     }
   }
   return edges;
