@@ -186,7 +186,7 @@ Status legend: ✅ done+validated · 🔬 hole identified · ⬜ not started.
 | Rust | Axum / actix / Rocket | request → route → handler | R + X | ✅ **Axum chained methods + namespaced handlers** — `.route("/x", get(h1).post(h2))` emitted only the first method+handler, and `get(mod::handler)` captured the module not the fn (realworld-axum S **12→19, 19/19**); balanced-paren scan + per-method nodes + last-`::`-segment handler. **Rocket attribute macros 550/556 (99%)** (Rocket repo L) — already strong. crates.io named axum routes resolve (6/8; rest are closures/var handlers; its API is mostly the utoipa `routes!` macro = frontier). Cargo-workspace module resolution (prior work). 🔬 **actix runtime routing** `web::get().to(handler)` / `web::resource().route()` (67 calls in actix-examples — the dominant actix style, unextracted; attribute macros 35/51) |
 | Java | Spring | request → @RestController → @Autowired service → repo | R + X | ✅ **bare `@GetMapping`/`@PostMapping` + class `@RequestMapping` prefix join → route→method** (realworld S / mall M / halo L) — was missing all path-less method mappings; DI controller→service resolves (name + dir). 🔬 Spring Data JPA derived queries (`findByEmail`) — metaprogramming frontier |
 | Kotlin | (coroutines / DI) | flow/callback dispatch | ? | ⬜ |
-| Swift | Vapor | request → route → controller | ? | ⬜ |
+| Swift | Vapor | request → route → controller | R + X | ✅ **was 0 routes on every real app** — the extractor required an `app/router/routes` receiver + a `"path"` literal, but real Vapor routes on grouped builders (`let todos = routes.grouped("todos"); todos.get(use: index)`) with NO path arg. Rewrote: any receiver, optional/non-string path segments, `.grouped`/`.group{}` prefix tracking, `use:` discriminator. vapor-template S **0→3 (3/3**, nested `/todos/:todoID`), SteamPress M **0→27 (27/27)**, SwiftPackageIndex-Server L **0→14 (14/14** handler resolution). 🔬 typed-route enums (SPI `SiteURL.x.pathComponents` — path label only, handler still resolves) + closure handlers `app.get("x"){ }` (anonymous) |
 | C# | ASP.NET Core | request → [Http*] action → DI service → EF | X | ✅ **feature-folder detection** (realworld 0→19 — was undetected) + **bare `[HttpGet]` + class `[Route]` prefix** (eShopOnWeb 9→33 / jellyfin L) — co-located so no claimsReference needed. 🔬 EF Core LINQ/DbSet (metaprogramming frontier) |
 | Ruby | Rails / Sinatra | request → routes.rb → Controller#action → model | R | ✅ **RESTful `resources`/`resource` routing → controller#action** (realworld S 16 / spree M / forem L), pluralization + only/except + claimsReference; explicit routes fixed to precise `controller#action` too. 🔬 ActiveRecord dynamic finders (`Article.find_by_slug`) — metaprogramming frontier |
 | PHP | Laravel | request → route → controller → Eloquent | R | ✅ **precise `Route::get([Ctrl::class,'m'])` / `'Ctrl@m'` → Ctrl@method** (realworld S / firefly M / bookstack L) — was resolving the bare method name to the WRONG controller (every `index`→ArticleController); Route::resource→controller. 🔬 Eloquent dynamic finders/relationships (metaprogramming frontier) |
@@ -388,6 +388,25 @@ Status legend: ✅ done+validated · 🔬 hole identified · ⬜ not started.
   n=2/arm): codegraph **0–2 read / 0 grep / 32–40s** vs without **3 read / 0–1 grep + glob / 33–41s** — modest
   (realworld-axum is in the small-repo tie zone) but consistent, with one fully-clean 0-read/0-grep run. Node
   count stable; the fix is Axum-scoped (the attribute/actix/Rocket path is untouched).
+- **Swift / Vapor (validated 2026-05-23, vapor-template S / SteamPress M / SwiftPackageIndex-Server L) — the resolver was effectively dead on real apps.**
+  The Vapor extractor only matched `(app|router|routes).METHOD("path", use: handler)`, but modern Vapor routes
+  on a grouped builder inside `RouteCollection.boot(routes:)`: `let todos = routes.grouped("todos");
+  todos.get(use: index)` — any var receiver, NO path arg (the path is the group prefix). Every real app tested
+  extracted **0 routes** (template, penny-bot, Feather, SteamPress, SPI). Rewrote the extractor: (1) any
+  receiver `\w+` (not just app/router/routes); (2) optional path segments that may be non-string
+  (`User.parameter`, `:id`, a path constant) — the `use:` keyword is the discriminator separating a route from
+  `Environment.get("X")` / `req.parameters.get("X")`; (3) a group-prefix map from `let X = Y.grouped("a")` and
+  `Y.group("a") { X in }` so a route on a grouped/nested var gets the full path (`todo.delete(use: delete)` →
+  `DELETE /todos/:todoID`). Result: vapor-template **0→3 (3/3**, nested path exact), SteamPress **0→27
+  (27/27**, incl. `BlogPost.parameter` routes), SPI **0→14 (14/14** handler resolution). Canonical flow
+  traverses (`createPostHandler` ← `GET /createPost`, → `createPostView`). **Residuals (frontier):**
+  typed-route enums (SPI registers via `app.get(SiteURL.x.pathComponents, use:)` — handler resolves but the
+  path label is `/`, no string literal) and closure handlers (`app.get("hello") { req in }` — anonymous, no
+  named target). penny-bot (Discord bot) and Feather (custom module router) have no standard Vapor routing at
+  all — the Vapor ecosystem's routing styles vary widely. Agent A/B (create-post flow, n=2/arm): codegraph
+  **0 read / 0 grep / 4 codegraph / 26–30s** (both runs fully clean) vs without **1–4 read / 0–2 grep +
+  glob/bash, one run spawned a sub-agent / 34–48s**. Node count stable; fix is Vapor-scoped (SwiftUI/UIKit
+  untouched).
 - **Difficulty gradient is real:** named-ref dispatch (resolver) is cheap; anonymous
   callback dispatch (synthesizer) is medium; **anonymous-arrow handlers are the hard
   remaining gap** (no identity → need synthesizer link-through-body, not yet built).
