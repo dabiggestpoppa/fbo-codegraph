@@ -624,6 +624,14 @@ export class ToolHandler {
   // once and every later tool call reuses the result — never shelling out to
   // git on the hot path. `undefined` = not computed yet; `null` = no mismatch.
   private worktreeMismatchCache: Map<string, WorktreeIndexMismatch | null> = new Map();
+  // Gate that the MCP engine pokes after `cg.open()` so the first tool call
+  // blocks on the post-open filesystem reconcile (catch-up sync). Without
+  // this, a tool call that races past `catchUpSync()` serves rows for files
+  // that were deleted (or edited) while no MCP server was running — and the
+  // per-file staleness banner can't help, because `getPendingFiles()` is
+  // populated by the watcher, not by catch-up. Cleared on first await so
+  // subsequent calls don't pay any cost.
+  private catchUpGate: Promise<void> | null = null;
 
   constructor(private cg: CodeGraph | null) {}
 
@@ -632,6 +640,17 @@ export class ToolHandler {
    */
   setDefaultCodeGraph(cg: CodeGraph): void {
     this.cg = cg;
+  }
+
+  /**
+   * Engine-only: register the catch-up sync promise so the next `execute()`
+   * call awaits it before serving. The handler swallows rejections (the
+   * engine logs them) so a sync failure never propagates as a tool error;
+   * we still want to serve a best-effort result over the same potentially-
+   * stale data, which is what would have happened without the gate.
+   */
+  setCatchUpGate(p: Promise<void> | null): void {
+    this.catchUpGate = p;
   }
 
   /**
@@ -999,6 +1018,16 @@ export class ToolHandler {
    */
   async execute(toolName: string, args: Record<string, unknown>): Promise<ToolResult> {
     try {
+      // Block the first tool call on the engine's post-open reconcile so we
+      // never serve rows for files deleted/edited while no MCP server was
+      // running. The gate is cleared after first await — subsequent calls
+      // pay nothing. Catch-up failures are logged by the engine; we
+      // proceed regardless so a transient sync error never breaks tools.
+      if (this.catchUpGate) {
+        const gate = this.catchUpGate;
+        this.catchUpGate = null;
+        try { await gate; } catch { /* engine already logged */ }
+      }
       // Honor the optional tool allowlist (CODEGRAPH_MCP_TOOLS): a trimmed
       // surface rejects ablated tools defensively even if a client cached them.
       if (!this.isToolAllowed(toolName)) {

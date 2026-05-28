@@ -90,6 +90,18 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now sees the four anonymous overrides in its trail without a Read.
 
 ### Fixed
+- **MCP tools no longer return rows for files deleted while no server was
+  running.** The post-open catch-up sync that reconciles the index against
+  the working tree (catching `git pull`/`checkout`/`rebase` and any edits
+  or deletes made between sessions) was fire-and-forget — so a tool call
+  that landed in the first ~50–300ms could race past it and serve rows
+  for files that no longer exist on disk. The per-file staleness banner
+  couldn't help here, because that signal is populated by the file
+  watcher (which doesn't see pre-startup changes). Now the first tool
+  call of the session awaits the catch-up before serving; subsequent
+  calls pay nothing. Most visible on the "deleted everything between
+  sessions" case, where MCP now returns the correct empty index instead
+  of stale rows. Validated end-to-end on a 10,640-file VS Code index.
 - **`codegraph index` / `init -i` summary now reports the true edge count.**
   The per-file counter in the orchestrator only saw extraction-phase edges,
   so resolution and synthesizer edges (often >50% of the graph on
