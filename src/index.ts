@@ -692,7 +692,7 @@ export class CodeGraph {
    * Find the project's "primary route file" — the file with the densest
    * concentration of framework-emitted `route` nodes (≥3 routes, ≥30%
    * of all non-test routes). Used to inline the routing config in
-   * `codegraph_context` responses on small realworld template repos
+   * `codegraph_explore` responses on small realworld template repos
    * (rails-realworld, laravel-realworld, drupal-admintoolbar, …) where
    * Glob+Read of `routes.rb`/`urls.py`/etc. otherwise beats codegraph.
    */
