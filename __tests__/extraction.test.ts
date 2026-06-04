@@ -3896,6 +3896,33 @@ describe('Python absolute module import resolution', () => {
     expect(osNode, 'no stdlib os.py node').toBeUndefined();
   });
 
+  it('Django include() links the root URLconf to the included app urls module', async () => {
+    // `url(r'^api/', include('app.urls'))` should record a dependency from the
+    // root urlconf onto the included app's `urls.py` — so editing an app's routes
+    // surfaces the project urlconf that mounts them.
+    fs.mkdirSync(path.join(tempDir, 'app'), { recursive: true });
+    fs.writeFileSync(path.join(tempDir, 'requirements.txt'), `django==4.0\n`);
+    fs.writeFileSync(path.join(tempDir, 'app/__init__.py'), '');
+    fs.writeFileSync(path.join(tempDir, 'app/views.py'), `def home(request):\n    return None\n`);
+    fs.writeFileSync(
+      path.join(tempDir, 'app/urls.py'),
+      `from django.conf.urls import url\nfrom . import views\nurlpatterns = [url(r'^$', views.home)]\n`
+    );
+    fs.writeFileSync(
+      path.join(tempDir, 'urls.py'),
+      `from django.conf.urls import include, url\nurlpatterns = [url(r'^app/', include('app.urls'))]\n`
+    );
+
+    cg = CodeGraph.initSync(tempDir);
+    await cg.indexAll();
+    cg.resolveReferences();
+
+    const appUrls = cg.getNodesByKind('file').find((n) => n.filePath.endsWith('app/urls.py'));
+    expect(appUrls, 'app/urls.py indexed').toBeDefined();
+    const deps = [...cg.getImpactRadius(appUrls!.id, 2).nodes.values()].map((n) => n.filePath ?? '');
+    expect(deps.some((p) => p.endsWith('urls.py') && !p.endsWith('app/urls.py')), 'root urlconf depends on the included app urls').toBe(true);
+  });
+
   it('resolves `from pkg import submodule` to the submodule under that package, not a same-named one', async () => {
     // FastAPI router-aggregator pattern: `from app.api.routes import authentication`
     // with same-named modules in sibling packages must resolve via the import's
