@@ -2781,6 +2781,39 @@ export class TreeSitterExtractor {
           }
           continue;
         }
+        // Dart: `class C extends Base with M1, M2` — the `superclass` node holds
+        // the extends type as a direct `type_identifier` AND a `mixins` child
+        // listing the `with` mixins (and `class C with M` has ONLY mixins, no
+        // extends type). The generic `namedChild(0)` path would read the
+        // `mixins` node itself as the superclass and drop every mixin — yet
+        // mixins are Dart's core composition mechanism (Flutter is built on
+        // them). Emit `extends` for the base and `implements` for each mixin.
+        if (this.language === 'dart' && child.type === 'superclass') {
+          for (const t of child.namedChildren) {
+            if (t.type === 'mixins') {
+              for (const m of t.namedChildren) {
+                if (m.type === 'type_identifier') {
+                  this.unresolvedReferences.push({
+                    fromNodeId: classId,
+                    referenceName: getNodeText(m, this.source),
+                    referenceKind: 'implements',
+                    line: m.startPosition.row + 1,
+                    column: m.startPosition.column,
+                  });
+                }
+              }
+            } else if (t.type === 'type_identifier') {
+              this.unresolvedReferences.push({
+                fromNodeId: classId,
+                referenceName: getNodeText(t, this.source),
+                referenceKind: 'extends',
+                line: t.startPosition.row + 1,
+                column: t.startPosition.column,
+              });
+            }
+          }
+          continue;
+        }
         // Extract parent class/interface names
         // Java uses type_list wrapper: superclass -> type_identifier, extends_interfaces -> type_list -> type_identifier
         const typeList = child.namedChildren.find((c: SyntaxNode) => c.type === 'type_list');
@@ -3139,6 +3172,27 @@ export class TreeSitterExtractor {
     // recorded and a `variable_name` like `$events` never mis-emits as a ref.
     if (this.language === 'php') {
       this.extractPhpTypeRefs(node, nodeId);
+      return;
+    }
+
+    // Dart: a `method_signature` wraps the real `function_signature` (where the
+    // params and return type live), and the return type is a bare
+    // `type_identifier` child, not a `type` field — so getChildByField below
+    // finds neither. Walk the inner signature: param names / the method name are
+    // `identifier` (not `type_identifier`), so only types surface.
+    if (this.language === 'dart') {
+      let sig: SyntaxNode | undefined = node;
+      if (node.type === 'method_signature') {
+        sig = node.namedChildren.find(
+          (c: SyntaxNode) =>
+            c.type === 'function_signature' ||
+            c.type === 'getter_signature' ||
+            c.type === 'setter_signature' ||
+            c.type === 'constructor_signature' ||
+            c.type === 'factory_constructor_signature'
+        ) ?? node;
+      }
+      this.extractTypeRefsFromSubtree(sig, nodeId);
       return;
     }
 
