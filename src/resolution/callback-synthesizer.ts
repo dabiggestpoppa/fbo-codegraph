@@ -1451,10 +1451,60 @@ function ginMiddlewareChainEdges(queries: QueryBuilder, ctx: ResolutionContext):
 }
 
 /**
+ * SvelteKit file-convention data flow. A route directory's `+page.svelte` (a
+ * `component` node) receives its `data` from the sibling `+page.server.{ts,js}`
+ * / `+page.{ts,js}` `load` function and posts forms to its `actions` — wired by
+ * the framework BY FILE PATH, with no static import between them. So editing a
+ * `load` shows no impact on the page it feeds, and the page looks like it has no
+ * server-side dependency. Link the page component to its sibling loader's
+ * `load` / `actions` (same for `+layout`). The pairing is path-deterministic
+ * (same directory, matching `+page`/`+layout` prefix), so it's precise — but
+ * it's a framework-convention edge, so provenance stays `heuristic`.
+ *
+ * Direction: page → load, so `getImpactRadius(load)` surfaces the page (editing
+ * a loader's data shows the page it feeds) and the page's dependencies include
+ * its loader.
+ */
+function svelteKitLoadEdges(ctx: ResolutionContext): Edge[] {
+  const edges: Edge[] = [];
+  const allFiles = new Set(ctx.getAllFiles());
+  const HOOKS = new Set(['load', 'actions']);
+  const HOOK_KINDS = new Set(['function', 'method', 'constant', 'variable']);
+  for (const file of allFiles) {
+    const m = file.match(/(.*\/)(\+(?:page|layout))\.svelte$/);
+    if (!m) continue;
+    const dir = m[1]!;
+    const prefix = m[2]!;
+    const page = ctx.getNodesInFile(file).find((n) => n.kind === 'component');
+    if (!page) continue;
+    for (const ext of ['.server.ts', '.server.js', '.ts', '.js']) {
+      const loaderFile = `${dir}${prefix}${ext}`;
+      if (!allFiles.has(loaderFile)) continue;
+      for (const hook of ctx.getNodesInFile(loaderFile)) {
+        if (!HOOK_KINDS.has(hook.kind) || !HOOKS.has(hook.name)) continue;
+        edges.push({
+          source: page.id,
+          target: hook.id,
+          kind: 'references',
+          line: page.startLine,
+          provenance: 'heuristic',
+          metadata: {
+            synthesizedBy: 'sveltekit-load',
+            via: hook.name,
+            registeredAt: `${loaderFile}:${hook.startLine ?? 0}`,
+          },
+        });
+      }
+    }
+  }
+  return edges;
+}
+
+/**
  * Synthesize dispatcher→callback edges (field observers + EventEmitters +
- * React re-render + JSX children + Vue templates + RN event channel +
- * Fabric native-impl + MyBatis Java↔XML + Gin middleware chain). Returns the
- * count added. Never throws into indexing — callers wrap in try/catch.
+ * React re-render + JSX children + Vue templates + SvelteKit load + RN event
+ * channel + Fabric native-impl + MyBatis Java↔XML + Gin middleware chain).
+ * Returns the count added. Never throws into indexing — callers wrap in try/catch.
  */
 export function synthesizeCallbackEdges(queries: QueryBuilder, ctx: ResolutionContext): number {
   // Go implicit `implements` edges must be synthesized AND persisted first: the
@@ -1470,6 +1520,7 @@ export function synthesizeCallbackEdges(queries: QueryBuilder, ctx: ResolutionCo
   const renderEdges = reactRenderEdges(queries, ctx);
   const jsxEdges = reactJsxChildEdges(ctx);
   const vueEdges = vueTemplateEdges(ctx);
+  const svelteKitEdges = svelteKitLoadEdges(ctx);
   const flutterEdges = flutterBuildEdges(queries, ctx);
   const cppEdges = cppOverrideEdges(queries);
   const ifaceEdges = interfaceOverrideEdges(queries);
@@ -1491,6 +1542,7 @@ export function synthesizeCallbackEdges(queries: QueryBuilder, ctx: ResolutionCo
     ...renderEdges,
     ...jsxEdges,
     ...vueEdges,
+    ...svelteKitEdges,
     ...flutterEdges,
     ...cppEdges,
     ...ifaceEdges,
