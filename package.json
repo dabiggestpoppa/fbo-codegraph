@@ -1,7 +1,7 @@
 {
-  "name": "@colbymchenry/codegraph",
+  "name": "@fbo/codegraph",
   "version": "0.9.9",
-  "description": "Supercharge Claude Code with semantic code intelligence. 94% fewer tool calls • 77% faster exploration • 100% local.",
+  "description": "FBO CodeGraph — Semantic code intelligence for quant developers. Analyze trading strategy code, backtest codebases, and Pine scripts.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {

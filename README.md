@@ -1,14 +1,14 @@
 <div align="center">
 
-# CodeGraph
+# FBO CodeGraph
 
-### Supercharge Claude Code, Cursor, Codex, OpenCode, Hermes Agent, Gemini, Antigravity, and Kiro with Semantic Code Intelligence
+### Semantic Code Intelligence for Quant Developers — Analyze Trading Strategy Code, Backtest Codebases, and Pine Scripts
 
-**~16% cheaper · ~58% fewer tool calls · 100% local**
+**Built for quant devs · Analyze any trading codebase · 100% local**
 
-### [Documentation & Website →](https://colbymchenry.github.io/codegraph/)
+### [Documentation & Website →](https://github.com/dabiggestpoppa/fbo-codegraph)
 
-[![npm version](https://img.shields.io/npm/v/@colbymchenry/codegraph.svg)](https://www.npmjs.com/package/@colbymchenry/codegraph)
+[![npm version](https://img.shields.io/npm/v/@fbo/codegraph.svg)](https://www.npmjs.com/package/@fbo/codegraph)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Self-contained](https://img.shields.io/badge/Node.js-bundled%20%C2%B7%20none%20required-brightgreen.svg)](https://nodejs.org/)
 
